@@ -26,6 +26,9 @@ with col2:
 # フィルタリング
 filtered_df = df[(df["ジャンル"] == selected_genre) & (df["グループ"] == selected_group)]
 
+# 再生数でソート
+filtered_df = filtered_df.sort_values(by="過去30日再生数", ascending=False)
+
 # 表示タイトル
 st.markdown(f"### \U0001F3AF ジャンル「{selected_genre}」・登録者数「{selected_group}」の上位チャンネル")
 
@@ -49,6 +52,5 @@ for idx, row in filtered_df.iterrows():
         with cols[1]:
             st.markdown(
                 f"**\U0001F3A5 トレンド動画**：[ {row['動画タイトル']} ]({video_url})  \n"
-                f"\U0001F4C5 投稿日：{row['投稿日']}  \n"
-                f"\U0001F4C8 再生数（直近3日間）：{row['再生数(3日間)']:,}回"
+                f"\U0001F4C5 投稿日：{row['投稿日']}"
             )
