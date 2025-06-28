@@ -3,7 +3,7 @@ import pandas as pd
 
 # ページ設定
 st.set_page_config(page_title="YouTubeジャンル別チャンネルランキング", layout="wide")
-st.title("\U0001F4CA YouTubeジャンル別チャンネルランキング（MVP）")
+st.title("\U0001F4CA YouTubeジャンル別急上昇チャンネルランキング")
 st.caption("直近30日間の総再生数で上位チャンネルを表示し、代表トレンド動画も紹介")
 
 # データ読み込み
