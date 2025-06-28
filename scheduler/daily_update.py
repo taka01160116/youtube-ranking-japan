@@ -9,14 +9,38 @@ from googleapiclient.errors import HttpError
 from utils.api_handler import YouTubeAPIKeyManager
 import isodate
 
+# ジャンル設定
 genre_keywords = {
-    "ゲーム": ["ゲーム実況", "ゲーム配信", "ゲーム攻略"],
+    "音楽": ["音楽", "MV", "BGM", "作業用BGM", "カバー曲", "歌ってみた"],
+    "ゲーム": ["ゲーム実況", "ゲーム攻略", "ゲームまとめ", "ゲームニュース"],
+    "アニメ・マンガ": ["アニメ", "マンガ", "漫画解説", "アニメ考察", "アニメ切り抜き"],
+    "映画": ["映画", "映画解説", "映画レビュー", "予告編"],
+    "料理・グルメ": ["料理", "レシピ", "グルメレビュー", "お菓子作り"],
+    "スポーツ": ["スポーツ", "試合ハイライト", "戦術解説", "スポーツニュース"],
+    "ニュース・時事": ["ニュース", "時事", "社会問題", "まとめ速報"],
+    "教育・勉強": ["勉強", "教育", "学習", "資格試験", "解説動画"],
+    "テクノロジー": ["テクノロジー", "ガジェット", "家電レビュー", "新製品紹介"],
+    "DIY・ハウツー": ["DIY", "作ってみた", "ハウツー", "実験動画", "工作"],
+    "ペット・動物": ["ペット", "動物", "犬動画", "猫動画", "動物まとめ"],
+    "自然・風景": ["自然", "風景", "絶景", "観光地紹介", "旅動画"],
+    "乗り物": ["鉄道", "車", "バイク", "飛行機", "乗り物解説"],
+    "雑学・解説・歴史": ["雑学", "科学解説", "歴史解説", "宇宙", "豆知識", "都市伝説"],
+    "商品レビュー": ["商品レビュー", "家電比較", "新製品レビュー", "ガジェット比較"],
+    "投資・マネー": ["投資", "経済解説", "資産運用", "お金の話"],
+    "クイズ・パズル": ["クイズ", "パズル", "謎解き", "頭の体操"],
+    "健康・フィットネス": ["健康", "フィットネス解説", "ダイエット知識", "医療解説"],
+    "3DCG・映像制作": ["3DCG", "モデリング", "映像制作", "アニメーションTips"],
+    "ランキング・まとめ": ["ランキング", "まとめ", "〇〇ベスト10", "〇〇まとめ", "比較解説"],
+    "2ch・なんJまとめ": ["2chまとめ", "なんJまとめ", "スレまとめ", "2ちゃんねる", "ゆっくり2ch"],
+    "ゆっくり解説・雑学": ["ゆっくり解説", "ゆっくり実況", "ゆっくり雑学", "ゆっくり歴史", "ゆっくりまとめ"],
 }
+CHANNELS_TXT = "data/channels.txt"
 
 def get_youtube(api_key):
     return build("youtube", "v3", developerKey=api_key)
 
 def search_videos(api_manager, keyword, published_after):
+    """キーワード検索で動画からチャンネルIDを抽出（動画IDも）"""
     videos = []
     next_page_token = None
 
@@ -42,88 +66,172 @@ def search_videos(api_manager, keyword, published_after):
                 raise
 
         for item in response.get("items", []):
-            video_id = item["id"]["videoId"]
-            channel_id = item["snippet"]["channelId"]
-            videos.append((video_id, channel_id))
-
+            idinfo = item.get("id", {})
+            if idinfo.get("kind") == "youtube#video" and "videoId" in idinfo:
+                video_id = idinfo["videoId"]
+                channel_id = item["snippet"]["channelId"]
+                videos.append((video_id, channel_id))
         next_page_token = response.get("nextPageToken")
         if not next_page_token:
             break
 
     return videos
 
-def get_video_details(api_manager, video_id):
+def get_uploads_playlist_id(api_manager, channel_id):
+    """各チャンネルのuploadsプレイリストID取得"""
     tried_keys = set()
-
     while True:
-        if len(tried_keys) >= len(api_manager.api_keys):
-            print("❌ get_video_detailsエラー：すべてのAPIキーがquotaExceededです")
-            return None
-
         api_key = api_manager.get_valid_key()
         if api_key in tried_keys:
             api_manager.index = (api_manager.index + 1) % len(api_manager.api_keys)
             continue
-
         youtube = get_youtube(api_key)
-
         try:
-            response = youtube.videos().list(
-                part="snippet,statistics,contentDetails",
-                id=video_id
+            res = youtube.channels().list(
+                part="contentDetails",
+                id=channel_id
             ).execute()
-
-            items = response.get("items", [])
+            items = res.get('items', [])
             if not items:
-                print(f"⚠️ 動画が見つかりません: {video_id}")
                 return None
-
-            info = items[0]
-
-            if "duration" not in info["contentDetails"]:
-                print(f"⚠️ durationが存在しません: {video_id}")
-                return None
-
-            duration = isodate.parse_duration(info["contentDetails"]["duration"]).total_seconds()
-            if duration < 300:
-                print(f"⚠️ durationが短すぎます（{duration:.1f}秒）: {video_id}")
-                return None
-
-            return {
-                "動画ID": video_id,
-                "動画タイトル": info["snippet"]["title"],
-                "投稿日": info["snippet"]["publishedAt"][:10],
-                "再生数": int(info["statistics"].get("viewCount", 0)),
-                "サムネイルURL": info["snippet"]["thumbnails"]["high"]["url"],
-                "duration": duration
-            }
-
+            return items[0]['contentDetails']['relatedPlaylists']['uploads']
         except HttpError as e:
             if e.resp.status == 403 and 'quotaExceeded' in str(e):
-                print("🔁 get_video_details：APIキー切り替え（quotaExceeded）")
+                print("🔁 get_uploads_playlist_id：APIキー切り替え（quotaExceeded）")
                 tried_keys.add(api_key)
                 api_manager.index = (api_manager.index + 1) % len(api_manager.api_keys)
                 continue
             else:
-                print(f"❌ get_video_detailsエラー：{e}")
+                print(f"❌ get_uploads_playlist_idエラー：{e}")
                 return None
 
-def get_channel_details(youtube, channel_id):
-    response = youtube.channels().list(
-        part="snippet,statistics",
-        id=channel_id
-    ).execute()
+def get_recent_videos_from_uploads(api_manager, playlist_id, days=30):
+    """uploadsプレイリストから過去days日以内の動画IDリスト取得"""
+    videos = []
+    next_page_token = None
+    today = datetime.datetime.utcnow()
+    threshold = today - datetime.timedelta(days=days)
+    while True:
+        api_key = api_manager.get_valid_key()
+        youtube = get_youtube(api_key)
+        try:
+            res = youtube.playlistItems().list(
+                part="snippet,contentDetails",
+                playlistId=playlist_id,
+                maxResults=50,
+                pageToken=next_page_token
+            ).execute()
+        except HttpError as e:
+            if e.resp.status == 403 and 'quotaExceeded' in str(e):
+                print("🔁 get_recent_videos_from_uploads：APIキー切り替え（quotaExceeded）")
+                api_manager.index = (api_manager.index + 1) % len(api_manager.api_keys)
+                continue
+            else:
+                print(f"❌ get_recent_videos_from_uploadsエラー：{e}")
+                break
 
-    items = response.get("items", [])
-    if not items:
-        return None
+        for item in res.get("items", []):
+            vid = item["contentDetails"]["videoId"]
+            published_at = item["contentDetails"].get("videoPublishedAt") or item["snippet"].get("publishedAt")
+            if not published_at:
+                continue
+            video_date = datetime.datetime.strptime(published_at, "%Y-%m-%dT%H:%M:%SZ")
+            if video_date < threshold:
+                return videos  # 30日より古いものは以降すべて古い
+            videos.append((vid, published_at))
+        next_page_token = res.get("nextPageToken")
+        if not next_page_token:
+            break
+    return videos
 
-    info = items[0]
-    return {
-        "チャンネルID": channel_id,
-        "チャンネル名": info["snippet"]["title"],
-        "登録者数": int(info["statistics"].get("subscriberCount", 0))
-    }
+def get_video_details_bulk(api_manager, video_id_list):
+    """動画IDリストを一括で詳細取得（最大50件ずつ）"""
+    results = []
+    failed_ids = []
+    import isodate
+    for i in range(0, len(video_id_list), 50):
+        batch = video_id_list[i:i+50]
+        tried_keys = set()
+        while True:
+            if len(tried_keys) >= len(api_manager.api_keys):
+                print("❌ get_video_details_bulk：APIキー全滅")
+                failed_ids.extend(batch)
+                break
+            api_key = api_manager.get_valid_key()
+            if api_key in tried_keys:
+                api_manager.index = (api_manager.index + 1) % len(api_manager.api_keys)
+                continue
+            youtube = get_youtube(api_key)
+            try:
+                response = youtube.videos().list(
+                    part="snippet,statistics,contentDetails",
+                    id=",".join(batch)
+                ).execute()
+                got_ids = set()
+                for info in response.get("items", []):
+                    got_ids.add(info["id"])
+                    if "duration" not in info["contentDetails"]:
+                        continue
+                    duration = isodate.parse_duration(info["contentDetails"]["duration"]).total_seconds()
+                    if duration < 300:
+                        continue  # 5分未満は除外（既存仕様）
+                    results.append({
+                        "動画ID": info["id"],
+                        "動画タイトル": info["snippet"]["title"],
+                        "投稿日": info["snippet"]["publishedAt"],
+                        "再生数": int(info["statistics"].get("viewCount", 0)),
+                        "サムネイルURL": info["snippet"]["thumbnails"]["high"]["url"],
+                        "duration": duration
+                    })
+                # 取得できなかったIDもリスト化
+                notfound = set(batch) - got_ids
+                if notfound:
+                    failed_ids.extend(list(notfound))
+                break  # batch成功したら次へ
+            except HttpError as e:
+                if e.resp.status == 403 and 'quotaExceeded' in str(e):
+                    print("🔁 get_video_details_bulk：APIキー切り替え（quotaExceeded）")
+                    tried_keys.add(api_key)
+                    api_manager.index = (api_manager.index + 1) % len(api_manager.api_keys)
+                    continue
+                else:
+                    print(f"❌ get_video_details_bulkエラー：{e}")
+                    failed_ids.extend(batch)
+                    break
+    return results, failed_ids
+
+def get_channel_details(api_manager, channel_id):
+    """チャンネル名・登録者数を取得"""
+    tried_keys = set()
+    while True:
+        api_key = api_manager.get_valid_key()
+        if api_key in tried_keys:
+            api_manager.index = (api_manager.index + 1) % len(api_manager.api_keys)
+            continue
+        youtube = get_youtube(api_key)
+        try:
+            response = youtube.channels().list(
+                part="snippet,statistics",
+                id=channel_id
+            ).execute()
+            items = response.get("items", [])
+            if not items:
+                return None
+            info = items[0]
+            return {
+                "チャンネルID": channel_id,
+                "チャンネル名": info["snippet"]["title"],
+                "登録者数": int(info["statistics"].get("subscriberCount", 0))
+            }
+        except HttpError as e:
+            if e.resp.status == 403 and 'quotaExceeded' in str(e):
+                print("🔁 get_channel_details：APIキー切り替え（quotaExceeded）")
+                tried_keys.add(api_key)
+                api_manager.index = (api_manager.index + 1) % len(api_manager.api_keys)
+                continue
+            else:
+                print(f"❌ get_channel_detailsエラー：{e}")
+                return None
 
 def main():
     print("▶️ 処理開始しました")
@@ -134,47 +242,67 @@ def main():
 
     all_data = []
     history_data = []
+    os.makedirs("data", exist_ok=True)
 
     for genre, keywords in genre_keywords.items():
         print(f"\n🎯 ジャンル処理中: {genre}")
-        video_map = {}
 
+        # ① キーワード検索で対象チャンネルIDを発掘（set型で重複排除）
+        channel_id_set = set()
         for kw in keywords:
             print(f"🔑 キーワード検索: {kw}")
             results = search_videos(api_manager, kw, published_after)
-            for video_id, channel_id in results:
-                video_map.setdefault(channel_id, []).append(video_id)
+            for _, channel_id in results:
+                channel_id_set.add(channel_id)
+        print(f"🔎 発見チャンネル数: {len(channel_id_set)}")
 
-        for channel_id, video_ids in video_map.items():
-            print(f"📺 チャンネル {channel_id} に {len(video_ids)} 本の動画を検出")
-            api_key = api_manager.get_valid_key()
-            youtube = get_youtube(api_key)
-            channel_info = get_channel_details(youtube, channel_id)
+        # channels.txt保存（毎回作り直し、次回以降流用可）
+        with open(CHANNELS_TXT, "w", encoding="utf-8") as f:
+            for cid in channel_id_set:
+                f.write(f"{cid}\n")
+
+        # ② 各チャンネルIDごとに「過去30日投稿の全動画」集計
+        for channel_idx, channel_id in enumerate(channel_id_set, 1):
+            print(f"\n📺 [{channel_idx}/{len(channel_id_set)}] チャンネル処理中: {channel_id}")
+
+            channel_info = get_channel_details(api_manager, channel_id)
             if not channel_info:
                 continue
 
-            valid_videos = []
-            skipped_count = 0
+            # ここ！登録者数2000人以下を除外
+            if channel_info["登録者数"] <= 2000:
+                print(f"⏭️ 登録者数2000人以下のため除外: {channel_id} ({channel_info['登録者数']}人)")
+                continue
 
-            for vid in video_ids:
-                v_info = get_video_details(api_manager, vid)
-                if v_info:
-                    valid_videos.append(v_info)
-                else:
-                    skipped_count += 1
+            uploads_id = get_uploads_playlist_id(api_manager, channel_id)
+            if not uploads_id:
+                continue
 
-            print(f"✅ 有効動画数: {len(valid_videos)} / {len(video_ids)}（スキップ: {skipped_count}）")
+            recent_videos = get_recent_videos_from_uploads(api_manager, uploads_id, days=30)
+            print(f"▶️  過去30日投稿動画数: {len(recent_videos)}")
+            video_ids = [vid for vid, _ in recent_videos]
 
-            # ★方法②：長尺動画が60%未満のチャンネルは除外
+            # bulkで詳細取得
+            video_infos, failed_ids = get_video_details_bulk(api_manager, video_ids)
+            if failed_ids:
+                print(f"⚠️ {len(failed_ids)}本の動画詳細取得に失敗: {failed_ids}")
+
+            valid_videos = [v for v in video_infos if v]
             long_videos = [v for v in valid_videos if v["duration"] >= 300]
-            if len(long_videos) < len(valid_videos) * 0.6:
+            if len(valid_videos) == 0 or len(long_videos) < len(valid_videos) * 0.6:
                 print(f"⚠️ チャンネル除外（長尺比率 < 60%）: {channel_id}")
                 continue
 
-            if not valid_videos:
+            # 【追加】ショート動画（duration < 60秒）はトレンド動画候補から除外
+            trend_candidates = [v for v in valid_videos if v["duration"] >= 60]
+            if not trend_candidates:
+                print(f"⚠️ トレンド候補が存在しないためスキップ: {channel_id}")
                 continue
 
-            rep_video = valid_videos[0]
+            # 再生数最大の動画をトレンド動画とする
+            trend_video = max(trend_candidates, key=lambda v: v["再生数"])
+
+            total_views = sum(v["再生数"] for v in valid_videos)
             group = "5万人以上" if channel_info["登録者数"] >= 50000 else "5万人未満"
 
             all_data.append({
@@ -183,18 +311,18 @@ def main():
                 "チャンネル名": channel_info["チャンネル名"],
                 "登録者数": channel_info["登録者数"],
                 "グループ": group,
-                "過去30日再生数": sum(v["再生数"] for v in valid_videos),
-                "動画ID": rep_video["動画ID"],
-                "動画タイトル": rep_video["動画タイトル"],
-                "再生数(3日間)": rep_video["再生数"],
-                "投稿日": rep_video["投稿日"],
-                "サムネイルURL": rep_video["サムネイルURL"]
+                "過去30日再生数": total_views,
+                "トレンド動画ID": trend_video["動画ID"],
+                "トレンド動画タイトル": trend_video["動画タイトル"],
+                "トレンド投稿日": trend_video["投稿日"][:10],
+                "トレンド動画再生数": trend_video["再生数"],
+                "サムネイルURL": trend_video["サムネイルURL"]
             })
 
             history_data.append({
                 "日付": today.strftime("%Y-%m-%d"),
-                "動画ID": rep_video["動画ID"],
-                "再生数": rep_video["再生数"]
+                "動画ID": trend_video["動画ID"],
+                "再生数": trend_video["再生数"]
             })
 
     df_all = pd.DataFrame(all_data)
