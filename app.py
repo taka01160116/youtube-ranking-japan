@@ -1,3 +1,17 @@
+import os
+import pandas as pd
+import streamlit as st
+
+st.write("CSVファイル存在:", os.path.exists("data/channel_video_data.csv"))
+if os.path.exists("data/channel_video_data.csv"):
+    st.write("ファイルサイズ(バイト):", os.path.getsize("data/channel_video_data.csv"))
+    try:
+        df = pd.read_csv("data/channel_video_data.csv")
+        st.write("データフレーム shape:", df.shape)
+        st.dataframe(df.head())  # データ冒頭を画面表示
+    except Exception as e:
+        st.write("読み込み時エラー:", str(e))
+
 import streamlit as st
 import pandas as pd
 
